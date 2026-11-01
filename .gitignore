@@ -1,0 +1,16 @@
+# Secretos y entorno local
+.env
+.env.*
+!.env.example
+acme.json
+*.htpasswd
+
+# Python
+__pycache__/
+*.pyc
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

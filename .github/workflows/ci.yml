@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validar stack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lint YAML
+        run: |
+          pip install --quiet yamllint
+          yamllint -c .yamllint.yml stack.yml traefik/ .github/
+
+      - name: docker compose config
+        run: docker compose --env-file .env.example -f stack.yml config --quiet
+
+      - name: Reglas de la plantilla
+        run: python scripts/validate.py
+
+      - name: ShellCheck deploy.sh
+        run: shellcheck scripts/deploy.sh
+
+      - name: Analizar deploy.ps1
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/deploy.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) { $errors | Format-List; exit 1 }
+          Write-Host "deploy.ps1 sin errores de sintaxis"
+
+  smoke-swarm:
+    name: Despliegue de prueba en Swarm
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inicializar Swarm y desplegar
+        run: |
+          docker swarm init
+          cp .env.example .env
+          # Staging de Let's Encrypt para no consumir cuota en CI
+          sed -i 's|^ACME_CA_SERVER=.*|ACME_CA_SERVER=https://acme-staging-v02.api.letsencrypt.org/directory|' .env
+          chmod +x scripts/deploy.sh
+          timeout 300 ./scripts/deploy.sh
+
+      - name: Verificar réplicas
+        run: |
+          for i in $(seq 1 30); do
+            replicas=$(docker service ls --filter name=edge_whoami --format '{{.Replicas}}')
+            echo "whoami: $replicas"
+            [ "$replicas" = "2/2" ] && exit 0
+            sleep 5
+          done
+          docker service ps edge_whoami --no-trunc
+          exit 1
+
+      - name: Probar enrutamiento por Traefik
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sk --resolve whoami.example.com:443:127.0.0.1 https://whoami.example.com/ | grep -q Hostname; then
+              echo "whoami responde a través de Traefik"; exit 0
+            fi
+            sleep 3
+          done
+          docker service logs edge_traefik --tail 50
+          exit 1
+
+      - name: Redirección HTTP -> HTTPS
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: whoami.example.com' http://127.0.0.1/)
+          echo "HTTP status: $code"
+          [ "$code" = "308" ] || [ "$code" = "301" ]

@@ -1,0 +1,39 @@
+# Configuración dinámica compartida (proveedor file).
+# Los routers la referencian con el sufijo @file, p. ej. secure-chain@file
+
+http:
+  middlewares:
+    security-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: strict-origin-when-cross-origin
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+        customResponseHeaders:
+          Server: ""
+          X-Powered-By: ""
+
+    rate-limit:
+      rateLimit:
+        average: 50
+        burst: 100
+        period: 1s
+
+    compress:
+      compress: {}
+
+    secure-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - rate-limit
+          - compress
+
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
